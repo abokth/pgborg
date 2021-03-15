@@ -33,7 +33,7 @@ This implements regular backups.
 
 #### pgdumpd - Regular full backups of PostgreSQL servers into a Borg archive
 
-A daemon which connects to all PostgreSQL instances on the host and regularly performs full backups of each database in each instance with a Borg archive as backend. Data is treamed directory from pg_dump to Borg, meaning minimal disk write activity.
+A daemon which connects to all PostgreSQL instances on the host and regularly performs full backups of each database in each instance with a Borg archive as backend. Data is streamed directly from pg_dump to Borg, meaning minimal disk write activity.
 
 #### pgdumprestore - Restore backups from pgdumpd
 
