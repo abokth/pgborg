@@ -27,10 +27,12 @@ Manage restorepoints which can be used as reference in pgcarestore (below).
 
 Restores an entire database from the archive, either the latest of at a specific restorepoint or a specific time. WALs are extracted and made available to the database during the recovery phase.
 
+    # systemctl stop pgcad
     # systemctl stop postgresql
     # rm -rf /var/lib/pgsql/data
     # pgcarestore restore
     # systemctl start postgresql
+    # systemctl start pgcad
 
 ### Regular backups
 
