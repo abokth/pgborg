@@ -57,4 +57,4 @@ Configure the service unit file /etc/systemd/system/pgdumpd.service as:
     [Install]
     WantedBy=multi-user.target
 
-Enable and start the repositories.
+Enable and start the services.
