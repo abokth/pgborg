@@ -257,7 +257,7 @@ class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
         backup_conf.apply_config()
 
         def cmd_extract(args):
-            archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance)
+            archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, version=self.service.version)
             if args.time:
                 dt = datetime.datetime.fromisoformat(args.time).astimezone()
                 timestamp = dt.strftime("%Y%m%d")
@@ -371,9 +371,9 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
                     dt = datetime.datetime.fromisoformat(args.time).astimezone()
                     timestamp = dt.strftime("%Y%m%d")
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, version=self.service.version).find_backup_before(timestamp)
             else:
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_latest_backup()
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, version=self.service.version).find_latest_backup()
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
             print(f"Would restore {base_backup} to {pgdata}")
@@ -390,9 +390,9 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
                     dt = datetime.datetime.fromisoformat(args.time).astimezone()
                     timestamp = dt.strftime("%Y%m%d")
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, version=self.service.version).find_backup_before(timestamp)
             else:
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_latest_backup()
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, version=self.service.version).find_latest_backup()
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
             base_backup.restore_to(pgdata, recovery_opts)
@@ -597,7 +597,7 @@ class PostgreSQLInstanceDumpBackupProcess():
         self.port = conf.port
         self.connstring = f"port={self.port}"
 
-        self.archive_manager = PostgreSQLDumpArchiveManager(borg, instance=service.instance)
+        self.archive_manager = PostgreSQLDumpArchiveManager(borg, instance=service.instance, version=self.service.version)
 
     def scan_datnames(self):
         datname_lister = PostgreSQLListDatabasesContext(self.connstring, uid=self.service.user_uid, gid=self.service.user_gid, groups=[self.service.user_gid])
@@ -665,7 +665,7 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
         self.port = self.conf.port
         self.borg = borg
 
-        self.archive_manager = PostgreSQLContinuousArchiveStorageManager(self.borg, instance=service.instance)
+        self.archive_manager = PostgreSQLContinuousArchiveStorageManager(self.borg, instance=service.instance, version=service.version)
 
     def get_archive_cycle(self, base_timestamp):
         return PostgreSQLContinuousArchiveCycleArchiver(self.borg, self.archive_manager, base_timestamp)
@@ -734,17 +734,19 @@ class PostgreSQLContinuousArchiveCycleArchiver():
         self.total_compressed_wal_size += arch.compressed_size
 
 class PostgreSQLDumpArchiveManager():
-    def __init__(self, borg, fqdn=None, instance=None):
+    def __init__(self, borg, fqdn=None, instance=None, version=None):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self.borg = borg
         if fqdn is None:
             fqdn = socket.getfqdn()
         if instance is None:
             instance = "default"
-        self.prefix = f"{fqdn}-{instance}-"
+        if version == None or version == "default":
+            version=""
+        self.pgsql_prefix = f"{fqdn}-{instance}-pgsql{version}-"
 
     def find_latest_backup(self, datname):
-        prefix = f"{self.prefix}pgsql-pgdump-{datname}-"
+        prefix = f"{self.pgsql_prefix}pgdump-{datname}-"
         self._logger.info(f"Listing archives with prefix: {prefix}")
         archives = list(self.borg.archives(prefix=prefix))
         archives.sort()
@@ -763,7 +765,7 @@ class PostgreSQLDumpArchiveManager():
         self.borg.rename(f"{dumpname}.tmp", dumpname)
 
     def get_dump_name(self, timestamp, datname):
-        return f"{self.prefix}pgsql-pgdump-{datname}-{timestamp}"
+        return f"{self.pgsql_prefix}pgdump-{datname}-{timestamp}"
 
     def escape_datname(self, s):
         if s.startswith("_") or "-" in s:
@@ -780,23 +782,25 @@ class PostgreSQLDumpArchiveManager():
 
     def expire_backups(self, datname):
         borg_datname = self.escape_datname(datname)
-        self.borg.expire_prefix(f"{self.prefix}pgsql-pgdump-{borg_datname}-")
+        self.borg.expire_prefix(f"{self.pgsql_prefix}pgdump-{borg_datname}-")
 
 class PostgreSQLContinuousArchiveStorageManager():
-    def __init__(self, borg, fqdn=None, instance=None):
+    def __init__(self, borg, fqdn=None, instance=None, version=None):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self.borg = borg
         if fqdn is None:
             fqdn = socket.getfqdn()
         if instance is None:
             instance = "default"
-        self.prefix = f"{fqdn}-{instance}-"
+        if version == None or version == "default":
+            version=""
+        self.pgsql_prefix = f"{fqdn}-{instance}-pgsql{version}-"
 
     def get_base_pgdata_name(self, base_timestamp):
-        return f"{self.prefix}pgsql-base-{base_timestamp}-snapshot-pgdata"
+        return f"{self.pgsql_prefix}base-{base_timestamp}-snapshot-pgdata"
 
     def get_wal_name(self, base_timestamp, archive_serial):
-        return f"{self.prefix}pgsql-base-{base_timestamp}-wals-{archive_serial}"
+        return f"{self.pgsql_prefix}base-{base_timestamp}-wals-{archive_serial}"
 
     def find_latest_backup(self):
         self.scan_backups()
@@ -828,7 +832,7 @@ class PostgreSQLContinuousArchiveStorageManager():
         base_backups = {}
         wals = set()
         needed_wals = set()
-        pgprefix = f"{self.prefix}pgsql-base-"
+        pgprefix = f"{self.pgsql_prefix}base-"
         for backup_archive in self.borg.archives(prefix=pgprefix):
             assert(backup_archive.name.startswith(pgprefix))
             if "-snapshot-pgdata" in backup_archive.name:
@@ -858,9 +862,11 @@ class PostgreSQLBaseArchive():
         name = self.base_backup_archive.name
         assert(name.startswith(prefix))
         name = name[len(prefix):]
-        assert(name.startswith("pgsql-base-"))
+        m = re.match(r"^pgsql\d*-base-", name)
+        assert(m)
+        pgsql_prefix = prefix + m.group(0)
         self.base_timestamp = name.split("-")[2]
-        self.wal_prefix = f"{prefix}pgsql-base-{self.base_timestamp}-"
+        self.wal_prefix = f"{pgsql_prefix}{self.base_timestamp}-"
 
     def add_archives(self, wal_archive):
         assert(wal_archive.name.startswith(self.wal_prefix))
@@ -922,7 +928,7 @@ class PostgreSQLWALArchive():
         name = self.backup_archive.name
         assert(name.startswith(prefix))
         name = name[len(prefix):]
-        assert(name.startswith("pgsql-base-"))
+        assert(re.match(r"^pgsql\d*-base-", name))
         self.name = self.backup_archive.name
         self.base_timestamp = name.split("-")[2]
 
