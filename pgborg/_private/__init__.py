@@ -502,7 +502,7 @@ class PerInstanceConfigFile():
     def conf_sections_for_service(self, service):
         i = service.instance if (service.instance) else "default"
         v = service.postgresql_version
-        return conf_sections(self, i, v)
+        return self.conf_sections(self, i, v)
 
     def conf_sections(self, i, v):
         return ["environment", f"env-{i}", f"env-{i}-{v}"]
