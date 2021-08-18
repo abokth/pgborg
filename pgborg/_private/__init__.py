@@ -230,7 +230,7 @@ class PostgreSQLRestoreProcess():
             service_filter_args['version'] = args.version
 
         system = SystemServices()
-        services = get_restore_postgresql_services(**service_filter_args)
+        services = system.get_restore_postgresql_services(**service_filter_args)
         if len(services) == 0:
             raise Exception("No matching PostgreSQL service found, try specifying --instance.")
         if len(services) > 1:
@@ -529,7 +529,7 @@ class PostgreSQLServerBackupProcess():
         databases = set()
 
         system = SystemServices()
-        services = get_backup_postgresql_services()
+        services = system.get_backup_postgresql_services()
 
         for service in services:
             if service.is_enabled() or service.is_active():
