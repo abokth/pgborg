@@ -221,7 +221,35 @@ class PostgreSQLBackupContext():
 def esc(command):
     return " ".join([shlex.quote(e) for e in command])
 
-class PostgreSQLDumpRestoreProcess():
+class PostgreSQLRestoreProcess():
+    def read_args(self, args):
+        service_filter_args = {}
+        if args.instance:
+            service_filter_args['instance'] = args.instance
+        if args.pgversion:
+            service_filter_args['version'] = args.version
+
+        system = SystemServices()
+        services = get_restore_postgresql_services(**service_filter_args)
+        if len(services) == 0:
+            raise Exception("No matching PostgreSQL service found, try specifying --instance.")
+        if len(services) > 1:
+            raise Exception("Multiple matching PostgreSQL service found, specify both --instance and --version if needed.")
+        self.service = services[0]
+
+        # Verify config existance.
+        pgdata = pathlib.Path(self.service.environment['PGDATA'])
+        conf = PostgreSQLConfig(pgdata / "postgresql.conf")
+
+        env = backup_conf.get_service_environment(self.service)
+        self.borg = BorgClient(env=env)
+
+        self.args = args
+
+    def main(self):
+        self.args.func(self.args)
+
+class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
@@ -258,8 +286,8 @@ class PostgreSQLDumpRestoreProcess():
         extract_parser = subparsers.add_parser('extract', help='extract command')
         extract_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         extract_parser.add_argument('--instance', action='store', help='instance name of backup to read')
+        extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         extract_parser.add_argument('--time', action='store', help='extract point')
-        extract_parser.add_argument('--restore-port', action='store', help='PGPORT value')
         extract_parser.add_argument('dbname', action='store', help='database name')
         extract_parser.add_argument('command', nargs=argparse.REMAINDER, help='command to pipe into (unless stdout)')
         extract_parser.set_defaults(func=cmd_extract)
@@ -275,23 +303,7 @@ class PostgreSQLDumpRestoreProcess():
             sink_command = sink_command[1:]
         self.sink_command = sink_command if len(sink_command) > 0 else None
 
-        port = args.restore_port
-        if port is None:
-            try:
-                self.service = Service(f"postgresql@{args.instance}.service") if args.instance else Service("postgresql.service")
-                pgdata = pathlib.Path(self.service.environment['PGDATA'])
-                conf = PostgreSQLConfig(pgdata / "postgresql.conf")
-                port = conf.port
-            except:
-                self._logger.warning("Could not read port from system service. Specify --restore-port or add --port to pg_restore arguments")
-
-        env = backup_conf.get_environment(args.instance) if args.instance else backup_conf.get_environment()
-        self.borg = BorgClient(env=env)
-
-        self.args = args
-
-    def main(self):
-        self.args.func(self.args)
+        self.read_args(args)
 
 class PostgreSQLDumpProcess():
     def __init__(self):
@@ -342,7 +354,7 @@ class PostgreSQLDumpProcess():
             self._notifystatus.set_status(f"CRITICAL {e}")
             raise e
 
-class PostgreSQLContinuousArchiveRestoreProcess():
+class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
@@ -397,6 +409,7 @@ class PostgreSQLContinuousArchiveRestoreProcess():
         restore_parser = subparsers.add_parser('restore', help='Restore command')
         restore_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         restore_parser.add_argument('--instance', action='store', help='instance name of backup to read')
+        extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         restore_parser.add_argument('--time', action='store', help='restore point')
         restore_parser.set_defaults(func=cmd_restore)
 
@@ -406,15 +419,7 @@ class PostgreSQLContinuousArchiveRestoreProcess():
             parser.print_usage(sys.stderr)
             sys.exit(1)
 
-        self.service = Service(f"postgresql@{args.instance}.service") if args.instance else Service("postgresql.service")
-
-        env = backup_conf.get_service_environment(self.service)
-        self.borg = BorgClient(env=env)
-
-        self.args = args
-
-    def main(self):
-        self.args.func(self.args)
+        self.read_args(args)
 
 class PostgreSQLContinuousArchivingProcess():
     def __init__(self):
@@ -492,11 +497,19 @@ class PerInstanceConfigFile():
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
     def get_service_environment(self, service):
-        return self.get_environment(instance=service.instance) if service.instance else self.get_environment()
+        return self.get_merged_environment(self.conf_sections_for_service(service))
 
-    def get_environment(self, instance=None):
+    def conf_sections_for_service(self, service):
+        i = service.instance if (service.instance) else "default"
+        v = service.postgresql_version
+        return conf_sections(self, i, v)
+
+    def conf_sections(self, i, v):
+        return ["environment", f"env-{i}", f"env-{i}-{v}"]
+
+    def get_merged_environment(self, conf_sections):
         env = {'XDG_CACHE_HOME': f"/var/cache/{self.appname}"}
-        for conf_section in ["environment", f"env-{instance}" if instance else "env-default"]:
+        for conf_section in conf_sections:
             if conf_section in self.conf:
                 env.update(self.conf[conf_section])
         return env
@@ -516,11 +529,9 @@ class PostgreSQLServerBackupProcess():
         databases = set()
 
         system = SystemServices()
+        services = get_backup_postgresql_services()
 
-        default_services = [Service("postgresql.service")] if "postgresql.service" in system.unit_names else []
-        instance_services = system.get_services("postgresql@")
-
-        for service in default_services + instance_services:
+        for service in services:
             if service.is_enabled() or service.is_active():
                 env = backup_conf.get_service_environment(service)
                 borg = BorgClient(env=env)
@@ -1207,9 +1218,13 @@ class SystemServices():
     def __init__(self):
         units = check_output(["systemctl", "list-units", "-t", "service", "--full", "--all", "--plain", "--no-legend"], stdin=DEVNULL, universal_newlines=True, timeout=60)
         self.unit_names = set([unit.split(" ")[0] for unit in units.split("\n")])
+        self.postgresql_services = [Service(name) for name in self.unit_names if re.match(r"^postgresql(|-\d+)(|@\w+)\.service$", name)]
 
-    def get_services(self, prefix):
-        return [Service(name) for name in self.unit_names if name.startswith(prefix)]
+    def get_backup_postgresql_services(self):
+        return [service for service in self.postgresql_services if service.is_enabled() or service.is_active()]
+
+    def get_restore_postgresql_services(self, instance=None, version=None):
+        return [service for service in self.postgresql_services if (service.instance_or_default == instance or instance == None) and (service.version == version or version == None)]
 
 class Service():
     def __init__(self, name):
@@ -1236,10 +1251,26 @@ class Service():
             self.user_gid = getpwnam(self.user).pw_gid
 
     @property
+    def postgresql_version(self):
+        m = re.match(r"^postgresql(|-\d+)(|@\w+)\.service$", self.name)
+        if not m:
+            raise Exception(f"Service name mismatch: {self.name}")
+        if m.group(1) == "":
+            return "default"
+        return m.group(1).split("-")[1]
+
+    @property
     def instance(self):
         if "@" in self.name:
             return self.name.split("@")[1].split(".")[0]
         return None
+
+    @property
+    def instance_or_default(self):
+        i = self.instance
+        if i is None:
+            return "default"
+        return i
 
     def is_enabled(self):
         try:
