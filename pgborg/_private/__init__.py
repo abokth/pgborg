@@ -828,18 +828,18 @@ class PostgreSQLContinuousArchiveStorageManager():
                 backup.delete()
 
     def scan_backups(self):
-        self._logger.info(f"Scanning backups with prefix {self.prefix}")
+        pgsql_base_prefix = f"{self.pgsql_prefix}base-"
+        self._logger.info(f"Scanning backups with prefix {pgsql_base_prefix}")
         base_backups = {}
         wals = set()
         needed_wals = set()
-        pgprefix = f"{self.pgsql_prefix}base-"
-        for backup_archive in self.borg.archives(prefix=pgprefix):
-            assert(backup_archive.name.startswith(pgprefix))
+        for backup_archive in self.borg.archives(prefix=pgsql_base_prefix):
+            assert(backup_archive.name.startswith(pgsql_base_prefix))
             if "-snapshot-pgdata" in backup_archive.name:
-                base_backup = PostgreSQLBaseArchive(self.prefix, backup_archive)
+                base_backup = PostgreSQLBaseArchive(pgsql_base_prefix, backup_archive)
                 base_backups[base_backup.base_timestamp] = base_backup
             elif "-wals-" in backup_archive.name:
-                wal_archive = PostgreSQLWALArchive(self.prefix, backup_archive)
+                wal_archive = PostgreSQLWALArchive(pgsql_base_prefix, backup_archive)
                 wals.add(wal_archive)
             else:
                 self._logger.warning(f"Unknown archive {backup_archive.name}")
@@ -856,17 +856,12 @@ class PostgreSQLContinuousArchiveStorageManager():
         self.orphans_wals = wals - needed_wals
 
 class PostgreSQLBaseArchive():
-    def __init__(self, prefix, backup_archive):
+    def __init__(self, pgsql_base_prefix, backup_archive):
+        assert(backup_archive.name.startswith(pgsql_base_prefix))
+        self.base_timestamp = backup_archive.name[len(pgsql_base_prefix):].split("-")[0]
         self.base_backup_archive = backup_archive
+        self.wal_prefix = f"{pgsql_base_prefix}{self.base_timestamp}-"
         self.wal_archives = set()
-        name = self.base_backup_archive.name
-        assert(name.startswith(prefix))
-        name = name[len(prefix):]
-        m = re.match(r"^pgsql\d*-base-", name)
-        assert(m)
-        pgsql_prefix = prefix + m.group(0)
-        self.base_timestamp = name.split("-")[2]
-        self.wal_prefix = f"{pgsql_prefix}{self.base_timestamp}-"
 
     def add_archives(self, wal_archive):
         assert(wal_archive.name.startswith(self.wal_prefix))
@@ -922,15 +917,11 @@ class PostgreSQLBaseArchive():
             wal.delete()
 
 class PostgreSQLWALArchive():
-    def __init__(self, prefix, backup_archive):
-        prefix = prefix
+    def __init__(self, pgsql_base_prefix, backup_archive):
+        assert(backup_archive.name.startswith(pgsql_base_prefix))
         self.backup_archive = backup_archive
-        name = self.backup_archive.name
-        assert(name.startswith(prefix))
-        name = name[len(prefix):]
-        assert(re.match(r"^pgsql\d*-base-", name))
         self.name = self.backup_archive.name
-        self.base_timestamp = name.split("-")[2]
+        self.base_timestamp = self.backup_archive.name[len(pgsql_base_prefix):].split("-")[2]
 
     def extract(self, cwd=None):
         self.backup_archive.extract(cwd=cwd)
