@@ -921,7 +921,7 @@ class PostgreSQLWALArchive():
         assert(backup_archive.name.startswith(pgsql_base_prefix))
         self.backup_archive = backup_archive
         self.name = self.backup_archive.name
-        self.base_timestamp = self.backup_archive.name[len(pgsql_base_prefix):].split("-")[2]
+        self.base_timestamp = self.backup_archive.name[len(pgsql_base_prefix):].split("-")[0]
 
     def extract(self, cwd=None):
         self.backup_archive.extract(cwd=cwd)
