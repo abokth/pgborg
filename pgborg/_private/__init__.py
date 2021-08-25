@@ -152,8 +152,10 @@ def postgresql_manage_backup_process(result, started, stop, success, connstring,
             started_res = None
             try:
                 with conn.cursor() as cur:
-                    cur.execute(f"SELECT pg_start_backup(%s, false, false);", (baklabel,))
+                    cur.execute("SELECT pg_start_backup(%s, false, false);", (baklabel,))
                     res = cur.fetchone()
+                    cur.execute("SELECT pg_switch_wal();")
+                    cur.fetchone()
                     started_res = 'started-backup'
             finally:
                 started.put(started_res)
@@ -221,7 +223,35 @@ class PostgreSQLBackupContext():
 def esc(command):
     return " ".join([shlex.quote(e) for e in command])
 
-class PostgreSQLDumpRestoreProcess():
+class PostgreSQLRestoreProcess():
+    def read_args(self, args):
+        service_filter_args = {}
+        if args.instance:
+            service_filter_args['instance'] = args.instance
+        if args.pgversion:
+            service_filter_args['pgversion'] = args.pgversion
+
+        system = SystemServices()
+        services = system.get_restore_postgresql_services(**service_filter_args)
+        if len(services) == 0:
+            raise Exception("No matching PostgreSQL service found, try specifying --instance.")
+        if len(services) > 1:
+            raise Exception("Multiple matching PostgreSQL service found, specify both --instance and --pgversion if needed.")
+        self.service = services[0]
+
+        # Verify config existance.
+        pgdata = pathlib.Path(self.service.environment['PGDATA'])
+        conf = PostgreSQLConfig(pgdata / "postgresql.conf")
+
+        env = backup_conf.get_service_environment(self.service)
+        self.borg = BorgClient(env=env)
+
+        self.args = args
+
+    def main(self):
+        self.args.func(self.args)
+
+class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
@@ -229,7 +259,7 @@ class PostgreSQLDumpRestoreProcess():
         backup_conf.apply_config()
 
         def cmd_extract(args):
-            archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance)
+            archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion)
             if args.time:
                 dt = datetime.datetime.fromisoformat(args.time).astimezone()
                 timestamp = dt.strftime("%Y%m%d")
@@ -258,8 +288,8 @@ class PostgreSQLDumpRestoreProcess():
         extract_parser = subparsers.add_parser('extract', help='extract command')
         extract_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         extract_parser.add_argument('--instance', action='store', help='instance name of backup to read')
+        extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         extract_parser.add_argument('--time', action='store', help='extract point')
-        extract_parser.add_argument('--restore-port', action='store', help='PGPORT value')
         extract_parser.add_argument('dbname', action='store', help='database name')
         extract_parser.add_argument('command', nargs=argparse.REMAINDER, help='command to pipe into (unless stdout)')
         extract_parser.set_defaults(func=cmd_extract)
@@ -275,23 +305,7 @@ class PostgreSQLDumpRestoreProcess():
             sink_command = sink_command[1:]
         self.sink_command = sink_command if len(sink_command) > 0 else None
 
-        port = args.restore_port
-        if port is None:
-            try:
-                self.service = Service(f"postgresql@{args.instance}.service") if args.instance else Service("postgresql.service")
-                pgdata = pathlib.Path(self.service.environment['PGDATA'])
-                conf = PostgreSQLConfig(pgdata / "postgresql.conf")
-                port = conf.port
-            except:
-                self._logger.warning("Could not read port from system service. Specify --restore-port or add --port to pg_restore arguments")
-
-        env = backup_conf.get_environment(args.instance) if args.instance else backup_conf.get_environment()
-        self.borg = BorgClient(env=env)
-
-        self.args = args
-
-    def main(self):
-        self.args.func(self.args)
+        self.read_args(args)
 
 class PostgreSQLDumpProcess():
     def __init__(self):
@@ -342,7 +356,7 @@ class PostgreSQLDumpProcess():
             self._notifystatus.set_status(f"CRITICAL {e}")
             raise e
 
-class PostgreSQLContinuousArchiveRestoreProcess():
+class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
@@ -359,9 +373,9 @@ class PostgreSQLContinuousArchiveRestoreProcess():
                     dt = datetime.datetime.fromisoformat(args.time).astimezone()
                     timestamp = dt.strftime("%Y%m%d")
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(timestamp)
             else:
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_latest_backup()
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_latest_backup()
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
             print(f"Would restore {base_backup} to {pgdata}")
@@ -378,9 +392,9 @@ class PostgreSQLContinuousArchiveRestoreProcess():
                     dt = datetime.datetime.fromisoformat(args.time).astimezone()
                     timestamp = dt.strftime("%Y%m%d")
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(timestamp)
             else:
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance).find_latest_backup()
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_latest_backup()
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
             base_backup.restore_to(pgdata, recovery_opts)
@@ -397,6 +411,7 @@ class PostgreSQLContinuousArchiveRestoreProcess():
         restore_parser = subparsers.add_parser('restore', help='Restore command')
         restore_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         restore_parser.add_argument('--instance', action='store', help='instance name of backup to read')
+        extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         restore_parser.add_argument('--time', action='store', help='restore point')
         restore_parser.set_defaults(func=cmd_restore)
 
@@ -406,15 +421,7 @@ class PostgreSQLContinuousArchiveRestoreProcess():
             parser.print_usage(sys.stderr)
             sys.exit(1)
 
-        self.service = Service(f"postgresql@{args.instance}.service") if args.instance else Service("postgresql.service")
-
-        env = backup_conf.get_service_environment(self.service)
-        self.borg = BorgClient(env=env)
-
-        self.args = args
-
-    def main(self):
-        self.args.func(self.args)
+        self.read_args(args)
 
 class PostgreSQLContinuousArchivingProcess():
     def __init__(self):
@@ -492,11 +499,19 @@ class PerInstanceConfigFile():
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
     def get_service_environment(self, service):
-        return self.get_environment(instance=service.instance) if service.instance else self.get_environment()
+        return self.get_merged_environment(self.conf_sections_for_service(service))
 
-    def get_environment(self, instance=None):
+    def conf_sections_for_service(self, service):
+        i = service.instance if (service.instance) else "default"
+        v = service.pgversion
+        return self.conf_sections(i, v)
+
+    def conf_sections(self, i, v):
+        return ["environment", f"env-{i}", f"env-{i}-{v}"]
+
+    def get_merged_environment(self, conf_sections):
         env = {'XDG_CACHE_HOME': f"/var/cache/{self.appname}"}
-        for conf_section in ["environment", f"env-{instance}" if instance else "env-default"]:
+        for conf_section in conf_sections:
             if conf_section in self.conf:
                 env.update(self.conf[conf_section])
         return env
@@ -516,11 +531,9 @@ class PostgreSQLServerBackupProcess():
         databases = set()
 
         system = SystemServices()
+        services = system.get_backup_postgresql_services()
 
-        default_services = [Service("postgresql.service")] if "postgresql.service" in system.unit_names else []
-        instance_services = system.get_services("postgresql@")
-
-        for service in default_services + instance_services:
+        for service in services:
             if service.is_enabled() or service.is_active():
                 env = backup_conf.get_service_environment(service)
                 borg = BorgClient(env=env)
@@ -586,7 +599,7 @@ class PostgreSQLInstanceDumpBackupProcess():
         self.port = conf.port
         self.connstring = f"port={self.port}"
 
-        self.archive_manager = PostgreSQLDumpArchiveManager(borg, instance=service.instance)
+        self.archive_manager = PostgreSQLDumpArchiveManager(borg, instance=service.instance, pgversion=self.service.pgversion)
 
     def scan_datnames(self):
         datname_lister = PostgreSQLListDatabasesContext(self.connstring, uid=self.service.user_uid, gid=self.service.user_gid, groups=[self.service.user_gid])
@@ -654,7 +667,7 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
         self.port = self.conf.port
         self.borg = borg
 
-        self.archive_manager = PostgreSQLContinuousArchiveStorageManager(self.borg, instance=service.instance)
+        self.archive_manager = PostgreSQLContinuousArchiveStorageManager(self.borg, instance=service.instance, pgversion=service.pgversion)
 
     def get_archive_cycle(self, base_timestamp):
         return PostgreSQLContinuousArchiveCycleArchiver(self.borg, self.archive_manager, base_timestamp)
@@ -723,17 +736,19 @@ class PostgreSQLContinuousArchiveCycleArchiver():
         self.total_compressed_wal_size += arch.compressed_size
 
 class PostgreSQLDumpArchiveManager():
-    def __init__(self, borg, fqdn=None, instance=None):
+    def __init__(self, borg, fqdn=None, instance=None, pgversion=None):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self.borg = borg
         if fqdn is None:
             fqdn = socket.getfqdn()
         if instance is None:
             instance = "default"
-        self.prefix = f"{fqdn}-{instance}-"
+        if pgversion == None or pgversion == "default":
+            pgversion=""
+        self.pgsql_prefix = f"{fqdn}-{instance}-pgsql{pgversion}-"
 
     def find_latest_backup(self, datname):
-        prefix = f"{self.prefix}pgsql-pgdump-{datname}-"
+        prefix = f"{self.pgsql_prefix}pgdump-{datname}-"
         self._logger.info(f"Listing archives with prefix: {prefix}")
         archives = list(self.borg.archives(prefix=prefix))
         archives.sort()
@@ -752,7 +767,7 @@ class PostgreSQLDumpArchiveManager():
         self.borg.rename(f"{dumpname}.tmp", dumpname)
 
     def get_dump_name(self, timestamp, datname):
-        return f"{self.prefix}pgsql-pgdump-{datname}-{timestamp}"
+        return f"{self.pgsql_prefix}pgdump-{datname}-{timestamp}"
 
     def escape_datname(self, s):
         if s.startswith("_") or "-" in s:
@@ -769,23 +784,25 @@ class PostgreSQLDumpArchiveManager():
 
     def expire_backups(self, datname):
         borg_datname = self.escape_datname(datname)
-        self.borg.expire_prefix(f"{self.prefix}pgsql-pgdump-{borg_datname}-")
+        self.borg.expire_prefix(f"{self.pgsql_prefix}pgdump-{borg_datname}-")
 
 class PostgreSQLContinuousArchiveStorageManager():
-    def __init__(self, borg, fqdn=None, instance=None):
+    def __init__(self, borg, fqdn=None, instance=None, pgversion=None):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self.borg = borg
         if fqdn is None:
             fqdn = socket.getfqdn()
         if instance is None:
             instance = "default"
-        self.prefix = f"{fqdn}-{instance}-"
+        if pgversion == None or pgversion == "default":
+            pgversion=""
+        self.pgsql_prefix = f"{fqdn}-{instance}-pgsql{pgversion}-"
 
     def get_base_pgdata_name(self, base_timestamp):
-        return f"{self.prefix}pgsql-base-{base_timestamp}-snapshot-pgdata"
+        return f"{self.pgsql_prefix}base-{base_timestamp}-snapshot-pgdata"
 
     def get_wal_name(self, base_timestamp, archive_serial):
-        return f"{self.prefix}pgsql-base-{base_timestamp}-wals-{archive_serial}"
+        return f"{self.pgsql_prefix}base-{base_timestamp}-wals-{archive_serial}"
 
     def find_latest_backup(self):
         self.scan_backups()
@@ -813,18 +830,18 @@ class PostgreSQLContinuousArchiveStorageManager():
                 backup.delete()
 
     def scan_backups(self):
-        self._logger.info(f"Scanning backups with prefix {self.prefix}")
+        pgsql_base_prefix = f"{self.pgsql_prefix}base-"
+        self._logger.info(f"Scanning backups with prefix {pgsql_base_prefix}")
         base_backups = {}
         wals = set()
         needed_wals = set()
-        pgprefix = f"{self.prefix}pgsql-base-"
-        for backup_archive in self.borg.archives(prefix=pgprefix):
-            assert(backup_archive.name.startswith(pgprefix))
+        for backup_archive in self.borg.archives(prefix=pgsql_base_prefix):
+            assert(backup_archive.name.startswith(pgsql_base_prefix))
             if "-snapshot-pgdata" in backup_archive.name:
-                base_backup = PostgreSQLBaseArchive(self.prefix, backup_archive)
+                base_backup = PostgreSQLBaseArchive(pgsql_base_prefix, backup_archive)
                 base_backups[base_backup.base_timestamp] = base_backup
             elif "-wals-" in backup_archive.name:
-                wal_archive = PostgreSQLWALArchive(self.prefix, backup_archive)
+                wal_archive = PostgreSQLWALArchive(pgsql_base_prefix, backup_archive)
                 wals.add(wal_archive)
             else:
                 self._logger.warning(f"Unknown archive {backup_archive.name}")
@@ -841,15 +858,12 @@ class PostgreSQLContinuousArchiveStorageManager():
         self.orphans_wals = wals - needed_wals
 
 class PostgreSQLBaseArchive():
-    def __init__(self, prefix, backup_archive):
+    def __init__(self, pgsql_base_prefix, backup_archive):
+        assert(backup_archive.name.startswith(pgsql_base_prefix))
+        self.base_timestamp = backup_archive.name[len(pgsql_base_prefix):].split("-")[0]
         self.base_backup_archive = backup_archive
+        self.wal_prefix = f"{pgsql_base_prefix}{self.base_timestamp}-"
         self.wal_archives = set()
-        name = self.base_backup_archive.name
-        assert(name.startswith(prefix))
-        name = name[len(prefix):]
-        assert(name.startswith("pgsql-base-"))
-        self.base_timestamp = name.split("-")[2]
-        self.wal_prefix = f"{prefix}pgsql-base-{self.base_timestamp}-"
 
     def add_archives(self, wal_archive):
         assert(wal_archive.name.startswith(self.wal_prefix))
@@ -905,15 +919,11 @@ class PostgreSQLBaseArchive():
             wal.delete()
 
 class PostgreSQLWALArchive():
-    def __init__(self, prefix, backup_archive):
-        prefix = prefix
+    def __init__(self, pgsql_base_prefix, backup_archive):
+        assert(backup_archive.name.startswith(pgsql_base_prefix))
         self.backup_archive = backup_archive
-        name = self.backup_archive.name
-        assert(name.startswith(prefix))
-        name = name[len(prefix):]
-        assert(name.startswith("pgsql-base-"))
         self.name = self.backup_archive.name
-        self.base_timestamp = name.split("-")[2]
+        self.base_timestamp = self.backup_archive.name[len(pgsql_base_prefix):].split("-")[0]
 
     def extract(self, cwd=None):
         self.backup_archive.extract(cwd=cwd)
@@ -1010,7 +1020,7 @@ class PostgreSQLInstanceContinuousArchiveCycle():
         # Check parameters
         if 'wal_level' in self.dbinstancebackupprocess.conf.values and self.dbinstancebackupprocess.conf.values['wal_level'] not in ["archive", "hot_standby", "replica", "logical"]:
             raise Exception("Change wal_level to either 'replica' (the default) or 'logical' first.")
-        archive_command_string = 'p="%p"; f="%f"; shopt -s nullglob; for d in $PGDATA.wals.*; do test ! -f "$d/$f" && cp "$p" "$d/$f.tmp$$" && mv "$d/$f.tmp$$" "$d/$f"; done'
+        archive_command_string = 'p="%p"; f="%f"; shopt -s nullglob; for d in ${PGDATA%%%%/}.wals.*; do test ! -f "$d/$f" && cp "$p" "$d/$f.tmp$$" && mv "$d/$f.tmp$$" "$d/$f"; done'
         if self.dbinstancebackupprocess.conf.values['archive_command'] != f"'{archive_command_string}'":
             raise Exception(f"Change archive_command to '{archive_command_string}'")
         if 'archive_timeout' not in self.dbinstancebackupprocess.conf.values or int(self.dbinstancebackupprocess.conf.values['archive_timeout']) > 600:
@@ -1207,9 +1217,13 @@ class SystemServices():
     def __init__(self):
         units = check_output(["systemctl", "list-units", "-t", "service", "--full", "--all", "--plain", "--no-legend"], stdin=DEVNULL, universal_newlines=True, timeout=60)
         self.unit_names = set([unit.split(" ")[0] for unit in units.split("\n")])
+        self.postgresql_services = [Service(name) for name in self.unit_names if re.match(r"^postgresql(|-\d+)(|@\w+)\.service$", name)]
 
-    def get_services(self, prefix):
-        return [Service(name) for name in self.unit_names if name.startswith(prefix)]
+    def get_backup_postgresql_services(self):
+        return [service for service in self.postgresql_services if service.is_enabled() or service.is_active()]
+
+    def get_restore_postgresql_services(self, instance=None, pgversion=None):
+        return [service for service in self.postgresql_services if (service.instance_or_default == instance or instance == None) and (service.pgversion == pgversion or pgversion == None)]
 
 class Service():
     def __init__(self, name):
@@ -1236,10 +1250,26 @@ class Service():
             self.user_gid = getpwnam(self.user).pw_gid
 
     @property
+    def pgversion(self):
+        m = re.match(r"^postgresql(|-\d+)(|@\w+)\.service$", self.name)
+        if not m:
+            raise Exception(f"Service name mismatch: {self.name}")
+        if m.group(1) == "":
+            return "default"
+        return m.group(1).split("-")[1]
+
+    @property
     def instance(self):
         if "@" in self.name:
             return self.name.split("@")[1].split(".")[0]
         return None
+
+    @property
+    def instance_or_default(self):
+        i = self.instance
+        if i is None:
+            return "default"
+        return i
 
     def is_enabled(self):
         try:
