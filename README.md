@@ -51,4 +51,5 @@ Example:
     # cd $(mktemp -d)
     # pgdumprestore extract mydb -- pg_restore -l >list-file
     # $EDITOR list-file
-    # pgdumprestore extract mydb -- pg_restore -L list-file -c -d mydb
+    # chown -Rv postgres:postgres .
+    # pgdumprestore extract mydb -- pg_restore -L $PWD/list-file -c -d mydb
