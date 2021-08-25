@@ -411,7 +411,7 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
         restore_parser = subparsers.add_parser('restore', help='Restore command')
         restore_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         restore_parser.add_argument('--instance', action='store', help='instance name of backup to read')
-        extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
+        restore_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         restore_parser.add_argument('--time', action='store', help='restore point')
         restore_parser.set_defaults(func=cmd_restore)
 
