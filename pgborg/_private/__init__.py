@@ -152,7 +152,7 @@ def postgresql_manage_backup_process(result, started, stop, success, connstring,
             started_res = None
             try:
                 with conn.cursor() as cur:
-                    cur.execute(f"SELECT pg_start_backup(%s, false, false);", (baklabel,))
+                    cur.execute("SELECT pg_start_backup(%s, false, false);", (baklabel,))
                     res = cur.fetchone()
                     started_res = 'started-backup'
             finally:
