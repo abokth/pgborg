@@ -154,6 +154,8 @@ def postgresql_manage_backup_process(result, started, stop, success, connstring,
                 with conn.cursor() as cur:
                     cur.execute("SELECT pg_start_backup(%s, false, false);", (baklabel,))
                     res = cur.fetchone()
+                    cur.execute("SELECT pg_switch_wal();")
+                    cur.fetchone()
                     started_res = 'started-backup'
             finally:
                 started.put(started_res)
