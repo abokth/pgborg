@@ -239,7 +239,7 @@ class PostgreSQLRestoreProcess():
             raise Exception("Multiple matching PostgreSQL service found, specify both --instance and --pgversion if needed.")
         self.service = services[0]
 
-        env = backup_conf.get_service_environment(self.service)
+        env = self.backup_conf.get_service_environment(self.service)
         self.borg = BorgClient(env=env)
 
         self.args = args
@@ -251,8 +251,8 @@ class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
-        backup_conf = PerInstanceConfigFile("pgdump")
-        backup_conf.apply_config()
+        self.backup_conf = PerInstanceConfigFile("pgdump")
+        self.backup_conf.apply_config()
 
         def cmd_extract(args):
             archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion)
@@ -356,8 +356,8 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
     def __init__(self):
         self._logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
 
-        backup_conf = PerInstanceConfigFile("pgca")
-        backup_conf.apply_config()
+        self.backup_conf = PerInstanceConfigFile("pgca")
+        self.backup_conf.apply_config()
 
         def cmd_info(args):
             if args.time:
