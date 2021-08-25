@@ -239,10 +239,6 @@ class PostgreSQLRestoreProcess():
             raise Exception("Multiple matching PostgreSQL service found, specify both --instance and --pgversion if needed.")
         self.service = services[0]
 
-        # Verify config existance.
-        pgdata = pathlib.Path(self.service.environment['PGDATA'])
-        conf = PostgreSQLConfig(pgdata / "postgresql.conf")
-
         env = backup_conf.get_service_environment(self.service)
         self.borg = BorgClient(env=env)
 
