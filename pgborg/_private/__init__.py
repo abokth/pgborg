@@ -1020,7 +1020,7 @@ class PostgreSQLInstanceContinuousArchiveCycle():
         # Check parameters
         if 'wal_level' in self.dbinstancebackupprocess.conf.values and self.dbinstancebackupprocess.conf.values['wal_level'] not in ["archive", "hot_standby", "replica", "logical"]:
             raise Exception("Change wal_level to either 'replica' (the default) or 'logical' first.")
-        archive_command_string = 'p="%p"; f="%f"; shopt -s nullglob; for d in $PGDATA.wals.*; do test ! -f "$d/$f" && cp "$p" "$d/$f.tmp$$" && mv "$d/$f.tmp$$" "$d/$f"; done'
+        archive_command_string = 'p="%p"; f="%f"; shopt -s nullglob; for d in ${PGDATA%%%%/}.wals.*; do test ! -f "$d/$f" && cp "$p" "$d/$f.tmp$$" && mv "$d/$f.tmp$$" "$d/$f"; done'
         if self.dbinstancebackupprocess.conf.values['archive_command'] != f"'{archive_command_string}'":
             raise Exception(f"Change archive_command to '{archive_command_string}'")
         if 'archive_timeout' not in self.dbinstancebackupprocess.conf.values or int(self.dbinstancebackupprocess.conf.values['archive_timeout']) > 600:
