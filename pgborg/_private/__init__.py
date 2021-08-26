@@ -401,6 +401,7 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
         info_parser = subparsers.add_parser('info', help='Info command')
         info_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         info_parser.add_argument('--instance', action='store', help='instance name of backup to read')
+        info_parser.add_argument('--pgversion', action='store', help='version of postgresql')
         info_parser.add_argument('--time', action='store', help='info point')
         info_parser.set_defaults(func=cmd_info)
 
