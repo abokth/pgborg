@@ -1005,8 +1005,7 @@ class PostgreSQLWalSpool():
             p = pathlib.Path(self.path).absolute()
             self._logger.warning(f"Could not delete dir: {p.as_posix()}")
             try:
-                #os.rename(self.path, p.parent / f"deleteme-{self.path.name}")
-                pass
+                os.rename(self.path, p.parent / f"deleteme-{self.path.name}")
             except:
                 self._logger.warning(f"Could not rename dir: {p.as_posix()}")
 
