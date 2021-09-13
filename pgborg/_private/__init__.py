@@ -375,6 +375,7 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
             print(f"Would restore {base_backup} to {pgdata}")
+            # TODO also print WAL
 
         def cmd_restore(args):
             recovery_opts = {}
@@ -815,13 +816,13 @@ class PostgreSQLContinuousArchiveStorageManager():
 
     def expire_backups(self):
         self.scan_backups()
-        for wal in self.orphans_wals:
+        for wal in sorted(list(self.orphans_wals)):
             self._logger.info(f"Deleting archive: {wal}")
             wal.delete()
         base_backups = list(self.backups.values())
         base_backups.sort()
         delete_backups = base_backups[0:-3]
-        for backup in delete_backups:
+        for backup in sorted(list(delete_backups)):
             if datetime.datetime.strptime(backup.base_timestamp, "%Y%m%d%H%M%S") < datetime.datetime.now() - datetime.timedelta(days=90):
                 self._logger.info(f"Deleting backups: {backup}")
                 backup.delete()
@@ -867,13 +868,13 @@ class PostgreSQLBaseArchive():
         self.wal_archives.add(wal_archive)
 
     def __lt__(self, other):
-        return self.base_backup_archive.name < other.base_backup_archive.name
+        return self.base_backup_archive < other.base_backup_archive
 
     def __eq__(self, other):
-        return self.base_backup_archive.name == other.base_backup_archive.name
+        return self.base_backup_archive == other.base_backup_archive
 
     def __str__(self):
-        return self.base_backup_archive.name
+        return str(self.base_backup_archive)
 
     def restore_to(self, pgdata, recovery_opts):
         self.extract_base_to(pgdata)
@@ -912,7 +913,7 @@ class PostgreSQLBaseArchive():
 
     def delete(self):
         self.base_backup_archive.delete()
-        for wal in self.wal_archives:
+        for wal in sorted(list(self.wal_archives))
             wal.delete()
 
 class PostgreSQLWALArchive():
@@ -928,8 +929,14 @@ class PostgreSQLWALArchive():
     def delete(self):
         self.backup_archive.delete()
 
+    def __lt__(self, other):
+        return self.backup_archive < other.backup_archive
+
+    def __eq__(self, other):
+        return self.backup_archive == other.backup_archive
+
     def __str__(self):
-        return self.backup_archive.name
+        return str(self.backup_archive)
 
 # Find all WAL dirs and archive those, then delete them.
 class PostgreSQLInstanceOldContinuousArchiveCycleCleanup():
@@ -1142,6 +1149,9 @@ class BorgArchive():
 
     def __eq__(self, other):
         return self.name == other.name
+
+    def __str__(self):
+        return self.name
 
     def __hash__(self):
         return hash(self.name)
