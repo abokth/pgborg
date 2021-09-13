@@ -913,7 +913,7 @@ class PostgreSQLBaseArchive():
 
     def delete(self):
         self.base_backup_archive.delete()
-        for wal in sorted(list(self.wal_archives))
+        for wal in sorted(list(self.wal_archives)):
             wal.delete()
 
 class PostgreSQLWALArchive():
