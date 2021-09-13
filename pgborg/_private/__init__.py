@@ -935,6 +935,9 @@ class PostgreSQLWALArchive():
     def __eq__(self, other):
         return self.backup_archive == other.backup_archive
 
+    def __hash__(self):
+        return hash(self.backup_archive)
+
     def __str__(self):
         return str(self.backup_archive)
 
