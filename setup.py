@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="pgborg",
-    version="0.0.6",
+    version="0.0.7",
     author="Alexander Boström",
     author_email="abo@kth.se",
     description="Services and utilities for continous archiving and regular full backups of PostgreSQL",
