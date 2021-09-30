@@ -59,6 +59,7 @@ from time import sleep, clock_gettime, CLOCK_MONOTONIC
 ## PostgreSQL across-fork-and-setuid proxies
 
 from multiprocessing import set_start_method, Process, Pipe, Queue
+from queue import Empty
 import psycopg2
 
 def ping_server(pipe_connection):
@@ -77,13 +78,18 @@ def mp_init():
     ping_p.join()
 
 def pop_final(queue, timeout=10):
-    result = queue.get(True, timeout)
     try:
-        while queue.get(False):
+        result = queue.get(True, timeout)
+        try:
+            while queue.get(False):
+                pass
+        except:
             pass
-    except:
-        pass
-    queue.close()
+    finally:
+        try:
+            queue.close()
+        except:
+            pass
     return result
 
 def clear_pipe(p):
@@ -107,6 +113,7 @@ def postgresql_list_databases_process(result, success, connstring, uid, gid, gro
                 datnames = [datname for (datname,) in cur.fetchall()]
     except Exception as e:
         error = e
+        datnames = None
     finally:
         result.put(datnames)
         result.close()
@@ -124,15 +131,24 @@ class PostgreSQLListDatabasesContext():
         self.process.start()
         try:
             self._logger.info("Waiting for result...")
-            res = pop_final(result, timeout=60)
+            try:
+                res = pop_final(result, timeout=60)
+            except Empty as e:
+                self._logger.error("Timeout while waiting for database list.")
+                raise Exception("Timeout while waiting for database list.")
             assert(res is not None)
             self._logger.info("Got result.")
             self.names = res
         finally:
             self._logger.info("Cleaning up...")
             try:
-                error = pop_final(success)
+                try:
+                    error = pop_final(success)
+                except Empty as e:
+                    self._logger.error("Timeout while waiting for status after requesting database list.")
+                    raise Exception("Timeout while waiting for status after requesting database list.")
                 if error is not None:
+                    self._logger.error(f"Error when listing databases: {error}")
                     raise error
             finally:
                 self.process.join()
@@ -162,7 +178,10 @@ def postgresql_manage_backup_process(result, started, stop, success, connstring,
                 started.close()
                 try:
                     # Wait for stop command
-                    assert(pop_final(stop, timeout=120) == 'stop-backup')
+                    try:
+                        assert(pop_final(stop, timeout=120) == 'stop-backup')
+                    except Empty as e:
+                        raise Exception("Timeout while waiting for go ahead for pg_stop_backup().")
                 finally:
                     # This is run whether we got stop or not
                     with conn.cursor() as cur:
@@ -171,6 +190,8 @@ def postgresql_manage_backup_process(result, started, stop, success, connstring,
                         gotlabel = res[1]
     except Exception as e:
         error = e
+        # Do not send both a label and an error.
+        gotlabel = None
     finally:
         result.put(gotlabel)
         result.close()
@@ -194,14 +215,24 @@ class PostgreSQLBackupContext():
 
     def start(self):
         self.process.start()
-        assert(pop_final(self.started_queue, timeout=120) == 'started-backup')
+        try:
+            assert(pop_final(self.started_queue, timeout=120) == 'started-backup')
+        except Empty as e:
+            self._logger.error("Timeout waiting for confirmation of pg_start_backup()")
+            raise Exception("Timeout waiting for confirmation of pg_start_backup()")
 
     def stop(self):
         self.stop_queue.put('stop-backup')
         self.stop_queue.close()
         self.stop_queue = None
-        self.backup_label = pop_final(self.result_queue, timeout=60)
-        assert(self.backup_label is not None)
+        try:
+            self.backup_label = pop_final(self.result_queue, timeout=60)
+        except Empty as e:
+            self._logger.error("Timeout while waiting for confirmation of finished backup.")
+            raise Exception("Timeout while waiting for confirmation of finished backup.")
+        if self.backup_label is None:
+            # (It may have been created before, or not at all.)
+            raise Exception("No backup label was created after backup stop was requested.")
         return self.backup_label
 
     def __exit__(self, type, value, traceback):
@@ -209,9 +240,14 @@ class PostgreSQLBackupContext():
             self.stop_queue.put('stop-backup')
             self.stop_queue.close()
         try:
-            error = pop_final(self.success)
-            if error is not None:
-                raise error
+            try:
+                error = pop_final(self.success)
+                if error is not None:
+                    self._logger.error(f"Error in backup process: {error}")
+                    raise error
+            except Empty as e:
+                self._logger.error("Timeout while waiting for backup process to finish.")
+                raise Exception("Timeout while waiting for backup process to finish.")
         finally:
             self.process.join()
             self._logger.info("Done.")
