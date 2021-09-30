@@ -943,7 +943,12 @@ class PostgreSQLBaseArchive():
         with TemporaryDirectory(dir=dest_dir.parent) as td:
             d = pathlib.Path(td) / "tmp"
             d.mkdir()
-            for wal in self.wal_archives:
+            # If duplicate WALs somehow make it into the Borg archive,
+            # the most recent ones will be used. This could happen if
+            # the host was rolled back to a snapshot at the filesystem
+            # level, so the same WAL name was used multiple times with
+            # different content.
+            for wal in sorted(list(self.wal_archives)):
                 wal.extract(cwd=d)
             d.rename(dest_dir)
 
