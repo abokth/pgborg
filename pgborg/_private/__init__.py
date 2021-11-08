@@ -709,6 +709,8 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
 
         self.archive_manager = PostgreSQLContinuousArchiveStorageManager(self.borg, instance=service.instance, pgversion=service.pgversion)
 
+        self.current_backup = None
+
     def get_archive_cycle(self, base_timestamp):
         return PostgreSQLContinuousArchiveCycleArchiver(self.borg, self.archive_manager, base_timestamp)
 
@@ -739,6 +741,10 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
         self.current_backup.do_backup()
 
     def end_backup_processes(self):
+        if self.current_backup is None:
+            # begin_backup_processes may not have been called yet.
+            return
+
         # We do not run do_backup_and_end() because we want the last
         # WAL dir to be kept until this service is started again.
         self.current_backup.do_backup()
