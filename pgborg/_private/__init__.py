@@ -367,7 +367,7 @@ class PostgreSQLDumpProcess():
             self._logger.info("Starting backups...")
 
             self._databases.begin_backup_processes()
-            self._databases.expire_server_backups()
+            self._databases.maybe_expire_backups()
 
             self._logger.info("Backup running.")
             sleeptime = CountDown(10)
@@ -490,7 +490,7 @@ class PostgreSQLContinuousArchivingProcess():
 
         try:
             self._databases.begin_backup_processes()
-            self._databases.expire_server_backups()
+            self._databases.maybe_expire_backups()
 
             self._logger.info("Backup running.")
             while True:
