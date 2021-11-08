@@ -370,10 +370,8 @@ class PostgreSQLDumpProcess():
             self._databases.maybe_expire_backups()
 
             self._logger.info("Backup running.")
-            sleeptime = CountDown(10)
-            while True:
-                self._databases.maybe_expire_backups()
-
+            sleeptime = CountDown(0)
+            while not self._stop.stop:
                 if sleeptime.reached_liftoff:
                     t = StopWatch()
                     self._databases.do_backups()
@@ -381,9 +379,12 @@ class PostgreSQLDumpProcess():
 
                 self._notifystatus.set_status("OK running")
                 self._notifystatus.set_ready()
+
+                if not self._databases.maybe_expire_backups():
+                    # We have more work to do, do not sleep.
+                    continue
+
                 self._stop.sleep(60)
-                if self._stop.stop:
-                    break
         except Exception as e:
             self._notifystatus.set_status(f"CRITICAL {e}")
             raise e
@@ -493,18 +494,18 @@ class PostgreSQLContinuousArchivingProcess():
             self._databases.maybe_expire_backups()
 
             self._logger.info("Backup running.")
-            while True:
-                self._databases.maybe_expire_backups()
-
+            while not self._stop.stop:
                 # TODO use inotify
                 self._databases.do_backups()
 
                 self._notifystatus.set_status("OK running")
                 self._notifystatus.set_ready()
 
+                if not self._databases.maybe_expire_backups():
+                    # We have more work to do, do not sleep.
+                    continue
+
                 self._stop.sleep(10)
-                if self._stop.stop:
-                    break
         except Exception as e:
             self._notifystatus.set_status(f"CRITICAL {e}")
             raise e
@@ -585,12 +586,15 @@ class PostgreSQLServerBackupProcess():
 
     def maybe_expire_backups(self):
         if self._last_expire is None or clock_gettime(CLOCK_MONOTONIC) - self._last_expire > 36000:
-            self.expire_server_backups()
+            return self.expire_server_backups()
+        return True
 
     def expire_server_backups(self):
         for db in self.databases:
-            db.expire_instance_backups()
+            if not db.expire_instance_backups():
+                return False
         self._last_expire = clock_gettime(CLOCK_MONOTONIC)
+        return True
 
     def do_backups(self):
         for db in self.databases:
@@ -666,7 +670,9 @@ class PostgreSQLInstanceDumpBackupProcess():
 
     def expire_instance_backups(self):
         for datname in self.datnames:
-            self.archive_manager.expire_dump_backups(datname)
+            if not self.archive_manager.expire_dump_backups(datname):
+                return False
+        return True
 
 class PostgreSQLDumpTime():
     def __init__(self, db, datname, archive_manager):
@@ -738,7 +744,7 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
         self.current_backup.do_backup()
 
     def expire_instance_backups(self):
-        self.archive_manager.expire_continuous_archive_backups()
+        return self.archive_manager.expire_continuous_archive_backups()
 
 class PostgreSQLContinuousArchiveCycleArchiver():
     def __init__(self, borg, archive_manager, base_timestamp):
@@ -819,6 +825,7 @@ class PostgreSQLDumpArchiveManager():
     def expire_dump_backups(self, datname):
         borg_datname = self.escape_datname(datname)
         self.borg.expire_prefix(f"{self.pgsql_prefix}pgdump-{borg_datname}-")
+        return True
 
 class PostgreSQLContinuousArchiveStorageManager():
     def __init__(self, borg, fqdn=None, instance=None, pgversion=None):
@@ -851,17 +858,23 @@ class PostgreSQLContinuousArchiveStorageManager():
         return base_backups[-1]
 
     def expire_continuous_archive_backups(self):
+        max_work_countdown = 64
         self.scan_backups()
         for wal in sorted(list(self.orphans_wals)):
             self._logger.info(f"Deleting archive: {wal}")
             wal.delete()
+            max_work_countdown -= 1
+            if max_work_countdown <= 0:
+                return False
         base_backups = list(self.backups.values())
         base_backups.sort()
         delete_backups = base_backups[0:-3]
         for backup in sorted(list(delete_backups)):
             if datetime.datetime.strptime(backup.base_timestamp, "%Y%m%d%H%M%S") < datetime.datetime.now() - datetime.timedelta(days=90):
                 self._logger.info(f"Deleting backups: {backup}")
-                backup.delete()
+                if not backup.delete_base_and_wals():
+                    return False
+        return True
 
     def scan_backups(self):
         pgsql_base_prefix = f"{self.pgsql_prefix}base-"
@@ -952,10 +965,16 @@ class PostgreSQLBaseArchive():
                 wal.extract(cwd=d)
             d.rename(dest_dir)
 
-    def delete(self):
+    def delete_base_and_wals(self):
         self.base_backup_archive.delete()
+        max_work_count = 64
         for wal in sorted(list(self.wal_archives)):
             wal.delete()
+            max_work_countdown -= 1
+            if max_work_countdown <= 0:
+                # The rest will be deleted as orphan archives.
+                return False
+        return True
 
 class PostgreSQLWALArchive():
     def __init__(self, pgsql_base_prefix, backup_archive):
