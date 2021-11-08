@@ -588,9 +588,9 @@ class PostgreSQLServerBackupProcess():
             self.expire_backups()
 
     def expire_backups(self):
-        self._last_expire = clock_gettime(CLOCK_MONOTONIC)
         for db in self.databases:
             db.expire_backups()
+        self._last_expire = clock_gettime(CLOCK_MONOTONIC)
 
     def do_backups(self):
         for db in self.databases:
