@@ -367,7 +367,7 @@ class PostgreSQLDumpProcess():
             self._logger.info("Starting backups...")
 
             self._databases.begin_backup_processes()
-            self._databases.expire_backups()
+            self._databases.expire_server_backups()
 
             self._logger.info("Backup running.")
             sleeptime = CountDown(10)
@@ -490,7 +490,7 @@ class PostgreSQLContinuousArchivingProcess():
 
         try:
             self._databases.begin_backup_processes()
-            self._databases.expire_backups()
+            self._databases.expire_server_backups()
 
             self._logger.info("Backup running.")
             while True:
@@ -585,11 +585,11 @@ class PostgreSQLServerBackupProcess():
 
     def maybe_expire_backups(self):
         if self._last_expire is None or clock_gettime(CLOCK_MONOTONIC) - self._last_expire > 36000:
-            self.expire_backups()
+            self.expire_server_backups()
 
-    def expire_backups(self):
+    def expire_server_backups(self):
         for db in self.databases:
-            db.expire_backups()
+            db.expire_instance_backups()
         self._last_expire = clock_gettime(CLOCK_MONOTONIC)
 
     def do_backups(self):
@@ -664,9 +664,9 @@ class PostgreSQLInstanceDumpBackupProcess():
                 dump.commit()
             self._logger.info(f"Done.")
 
-    def expire_backups(self):
+    def expire_instance_backups(self):
         for datname in self.datnames:
-            self.archive_manager.expire_backups(datname)
+            self.archive_manager.expire_dump_backups(datname)
 
 class PostgreSQLDumpTime():
     def __init__(self, db, datname, archive_manager):
@@ -737,8 +737,8 @@ class PostgreSQLInstanceContinuousArchiveBackupProcess():
         # WAL dir to be kept until this service is started again.
         self.current_backup.do_backup()
 
-    def expire_backups(self):
-        self.archive_manager.expire_backups()
+    def expire_instance_backups(self):
+        self.archive_manager.expire_continuous_archive_backups()
 
 class PostgreSQLContinuousArchiveCycleArchiver():
     def __init__(self, borg, archive_manager, base_timestamp):
@@ -816,7 +816,7 @@ class PostgreSQLDumpArchiveManager():
             return f"_{escape_character}_{escaped_string}"
         return s
 
-    def expire_backups(self, datname):
+    def expire_dump_backups(self, datname):
         borg_datname = self.escape_datname(datname)
         self.borg.expire_prefix(f"{self.pgsql_prefix}pgdump-{borg_datname}-")
 
@@ -850,7 +850,7 @@ class PostgreSQLContinuousArchiveStorageManager():
         base_backups.sort()
         return base_backups[-1]
 
-    def expire_backups(self):
+    def expire_continuous_archive_backups(self):
         self.scan_backups()
         for wal in sorted(list(self.orphans_wals)):
             self._logger.info(f"Deleting archive: {wal}")
