@@ -973,7 +973,7 @@ class PostgreSQLBaseArchive():
 
     def delete_base_and_wals(self):
         self.base_backup_archive.delete()
-        max_work_count = 64
+        max_work_countdown = 64
         for wal in sorted(list(self.wal_archives)):
             wal.delete()
             max_work_countdown -= 1
