@@ -778,7 +778,7 @@ class PostgreSQLContinuousArchiveCycleArchiver():
     def archive_wals(self, path):
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         self.count += 1
-        arch = self.borg.archive(self.get_wal_name(f"{timestamp}-{self.count}"), path, ".")
+        arch = self.borg.archive(self.get_wal_name(f"{timestamp}-{self.count}"), path, ".", exclude="????????????????????????.tmp*")
         self.total_compressed_wal_size += arch.compressed_size
 
 class PostgreSQLDumpArchiveManager():
@@ -1067,6 +1067,8 @@ class PostgreSQLWalSpool():
     # When this is called, there should already by another spool picking up new archives.
     def do_backup_and_end(self):
         self._logger.info(f"Cleaning up {pathlib.Path(self.path).as_posix()}...")
+        # Run twice to avoid leaving a tmp file, if possible.
+        self.do_spool()
         self.do_spool()
         try:
             pathlib.Path(self.path).rmdir()
