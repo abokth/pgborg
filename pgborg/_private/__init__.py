@@ -216,7 +216,7 @@ class PostgreSQLBackupContext():
     def start(self):
         self.process.start()
         try:
-            assert(pop_final(self.started_queue, timeout=120) == 'started-backup')
+            assert(pop_final(self.started_queue, timeout=240) == 'started-backup')
         except Empty as e:
             self._logger.error("Timeout waiting for confirmation of pg_start_backup()")
             raise Exception("Timeout waiting for confirmation of pg_start_backup()")
