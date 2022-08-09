@@ -375,7 +375,12 @@ class PostgreSQLDumpProcess():
                 if sleeptime.reached_liftoff:
                     t = StopWatch()
                     self._databases.do_backups()
-                    sleeptime.reset(t=min(3600,max(3600*24,t.total*10)))
+                    if t.total >= 3600*5:
+                        sleeptime.reset(t=3600*24*7)
+                    elif t.total >= 3600:
+                        sleeptime.reset(t=3600*24)
+                    else:
+                        sleeptime.reset(t=3600)
 
                 self._notifystatus.set_status("OK running")
                 self._notifystatus.set_ready()
