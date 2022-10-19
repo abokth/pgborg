@@ -830,6 +830,7 @@ class PostgreSQLDumpArchiveManager():
                     escaped_char = f"{e}{ord(plain[0])}{e}"
                     rest = escape_with(e, plain[1:])
                     return f"{escaped_char}{rest}"
+            escaped_string = escape_with(escape_character, s)
             return f"_{escape_character}_{escaped_string}"
         return s
 
