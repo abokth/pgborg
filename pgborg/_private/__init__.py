@@ -965,11 +965,20 @@ class PostgreSQLBaseArchive():
         os.chown(walxdir, statinfo.st_uid, statinfo.st_gid)
         os.chown(waltmp, statinfo.st_uid, statinfo.st_gid)
 
-        p = pgdata / "recovery.conf"
-        with open(p, "w") as f:
+        p = pgdata / "postgresql.conf"
+        with open(p, "a") as f:
             for (key,value) in recovery_opts.items():
-                print(f"{key} = {value}", file=f)
+                print(f"# {key} can and should be commented out after recovery is done", file=f)
+                print(f"{key} = '{value}'", file=f)
+            print(f"# restore_command can and should be commented out after recovery is done", file=f)
             print(f"restore_command = 'cp {walxdir.as_posix()}/%f \"%p\"'", file=f)
+        statinfo = os.lstat(pgdata)
+        os.chown(p, statinfo.st_uid, statinfo.st_gid)
+
+        p = pgdata / "recovery.signal"
+        with open(p, "a") as f:
+            print(f"This file exists to recover the WALs from {walxdir.as_posix()}", file=f)
+            print(f"To start recovery, start the postgresql service, watch {pgdata.as_posix()}/log/*.log until it reaches pause state. Then 'select pg_wal_replay_resume();' to commit. Comment out the recovery options in postgresql.conf and clean up the temporary WAL directory.", file=f)
         statinfo = os.lstat(pgdata)
         os.chown(p, statinfo.st_uid, statinfo.st_gid)
 
