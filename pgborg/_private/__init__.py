@@ -259,6 +259,20 @@ class PostgreSQLBackupContext():
 def esc(command):
     return " ".join([shlex.quote(e) for e in command])
 
+time_spec_help = "%%Y-%%m-%%dT%%H:%%M:%%S.%%f, %%Y-%%m-%%dT%%H:%%M:%%S, %%Y%%m%%d%%H%%M%%S, %%Y-%%m-%%dT%%H:%%M, %%Y-%%m-%%d, %%Y%%m%%d, T%%H:%%M:%%S.%%f, T%%H:%%M:%%S, T%%H:%%M, r%%H:%%M, T%%H%%M"
+def parse_date_string(s):
+    for pattern in [r"%Y-%m-%dT%H:%M:%S.%f", r"%Y-%m-%dT%H:%M:%S", "%Y%m%d%H%M%S", r"%Y-%m-%dT%H:%M", r"%Y-%m-%d", r"%Y%m%d"]:
+        try:
+            return datetime.datetime.strptime(s, pattern)
+        except ValueError as e:
+            pass
+    for pattern in [r"T%H:%M:%S.%f", r"T%H:%M:%S", r"T%H:%M", r"%H:%M", r"T%H%M"]:
+        try:
+            return datetime.datetime.combine(datetime.datetime.now(), datetime.datetime.strptime(s, pattern).time())
+        except ValueError as e:
+            pass
+    raise ValueError(f"Could not parse date and time: {s}")
+                        
 class PostgreSQLRestoreProcess():
     def read_args(self, args):
         service_filter_args = {}
@@ -293,9 +307,8 @@ class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
         def cmd_extract(args):
             archive_manager = PostgreSQLDumpArchiveManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion)
             if args.time:
-                dt = datetime.datetime.fromisoformat(args.time).astimezone()
-                timestamp = dt.strftime("%Y%m%d")
-                backup = archive_manager.find_backup_before(timestamp, args.dbname)
+                dt = parse_date_string(args.time).astimezone()
+                backup = archive_manager.find_backup_before(dt, args.dbname)
             else:
                 backup = archive_manager.find_latest_backup(args.dbname)
 
@@ -321,7 +334,7 @@ class PostgreSQLDumpRestoreProcess(PostgreSQLRestoreProcess):
         extract_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         extract_parser.add_argument('--instance', action='store', help='instance name of backup to read')
         extract_parser.add_argument('--pgversion', action='store', help='version of postgresql')
-        extract_parser.add_argument('--time', action='store', help='extract point')
+        extract_parser.add_argument('--time', action='store', help=f"extract point ({time_spec_help})")
         extract_parser.add_argument('dbname', action='store', help='database name')
         extract_parser.add_argument('command', nargs=argparse.REMAINDER, help='command to pipe into (unless stdout)')
         extract_parser.set_defaults(func=cmd_extract)
@@ -402,36 +415,41 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
         self.backup_conf.apply_config()
 
         def cmd_info(args):
+            recovery_opts = {}
+
             if args.time:
-                timestamp = None
+                dt = None
                 if args.time.startswith("restorepoint-"):
-                    timestamp = args.time.split("-")[1]
+                    dt = datetime.datetime.strptime(args.time.split("-")[1], r"%Y%m%d%H%M%S").astimezone()
                     recovery_opts['recovery_target_name'] = args.time
                 else:
-                    dt = datetime.datetime.fromisoformat(args.time).astimezone()
-                    timestamp = dt.strftime("%Y%m%d")
+                    dt = parse_date_string(args.time).astimezone()
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(dt)
             else:
                 base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_latest_backup()
 
             pgdata = pathlib.Path(self.service.environment['PGDATA'])
-            print(f"Would restore {base_backup} to {pgdata}")
+            if 'recovery_target_name' in recovery_opts:
+                print(f"Would restore {base_backup} to {pgdata} with recovery_target_name={recovery_opts['recovery_target_name']}")
+            elif 'recovery_target_time' in recovery_opts:
+                print(f"Would restore {base_backup} to {pgdata} with recovery_target_time={recovery_opts['recovery_target_time']}")
+            else:
+                print(f"Would restore {base_backup} to {pgdata}")
             # TODO also print WAL
 
         def cmd_restore(args):
             recovery_opts = {}
 
             if args.time:
-                timestamp = None
+                dt = None
                 if args.time.startswith("restorepoint-"):
-                    timestamp = args.time.split("-")[1]
+                    dt = datetime.datetime.strptime(args.time.split("-")[1], r"%Y%m%d%H%M%S").astimezone()
                     recovery_opts['recovery_target_name'] = args.time
                 else:
-                    dt = datetime.datetime.fromisoformat(args.time).astimezone()
-                    timestamp = dt.strftime("%Y%m%d")
+                    dt = parse_date_string(args.time).astimezone()
                     recovery_opts['recovery_target_time'] = dt.isoformat()
-                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(timestamp)
+                base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_backup_before(dt)
             else:
                 base_backup = PostgreSQLContinuousArchiveStorageManager(self.borg, fqdn=args.fqdn, instance=self.service.instance, pgversion=self.service.pgversion).find_latest_backup()
 
@@ -445,14 +463,14 @@ class PostgreSQLContinuousArchiveRestoreProcess(PostgreSQLRestoreProcess):
         info_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         info_parser.add_argument('--instance', action='store', help='instance name of backup to read')
         info_parser.add_argument('--pgversion', action='store', help='version of postgresql')
-        info_parser.add_argument('--time', action='store', help='info point')
+        info_parser.add_argument('--time', action='store', help=f"info point ({time_spec_help})")
         info_parser.set_defaults(func=cmd_info)
 
         restore_parser = subparsers.add_parser('restore', help='Restore command')
         restore_parser.add_argument('--fqdn', action='store', help='fqdn of backup to read')
         restore_parser.add_argument('--instance', action='store', help='instance name of backup to read')
         restore_parser.add_argument('--pgversion', action='store', help='version of postgresql')
-        restore_parser.add_argument('--time', action='store', help='restore point')
+        restore_parser.add_argument('--time', action='store', help=f"restore point ({time_spec_help})")
         restore_parser.set_defaults(func=cmd_restore)
 
         args = parser.parse_args()
@@ -865,7 +883,7 @@ class PostgreSQLContinuousArchiveStorageManager():
 
     def find_backup_before(self, timestamp):
         self.scan_backups()
-        base_backups = [backup for backup in self.backups.values() if backup.base_timestamp <= timestamp]
+        base_backups = [backup for backup in self.backups.values() if datetime.datetime.strptime(backup.base_timestamp, r"%Y%m%d%H%M%S").astimezone() <= timestamp]
         base_backups.sort()
         return base_backups[-1]
 
@@ -882,7 +900,7 @@ class PostgreSQLContinuousArchiveStorageManager():
         base_backups.sort()
         delete_backups = base_backups[0:-3]
         for backup in sorted(list(delete_backups)):
-            if datetime.datetime.strptime(backup.base_timestamp, "%Y%m%d%H%M%S") < datetime.datetime.now() - datetime.timedelta(days=90):
+            if datetime.datetime.strptime(backup.base_timestamp, "%Y%m%d%H%M%S").astimezone() < datetime.datetime.now().astimezone() - datetime.timedelta(days=90):
                 self._logger.info(f"Deleting backups: {backup}")
                 if not backup.delete_base_and_wals():
                     return False
